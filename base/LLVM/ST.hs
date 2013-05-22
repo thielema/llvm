@@ -191,8 +191,10 @@ module LLVM.ST
     )
     where
 
+import Control.Monad.Trans.Reader (ReaderT, runReaderT, ask)
+import Control.Monad.Trans.Class (lift)
+import Control.Monad (unless, void, forM, forM_, filterM)
 import Control.Applicative
-import Control.Monad.Reader
 import Control.Monad.ST.Safe
 import Control.Monad.ST.Unsafe (unsafeIOToST, unsafeSTToIO)
 import System.IO.Unsafe (unsafePerformIO)
@@ -220,7 +222,7 @@ newtype STPassManager c s = STPM W.PassManager
     deriving Eq
 newtype Module = PM W.Module
     deriving Eq
-newtype STModule c s = STM { unSTM :: W.Module }
+newtype STModule c s = STM { _unSTM :: W.Module }
     deriving Eq
 newtype STBasicBlock c s = STB { unSTB :: BasicBlock }
     deriving Eq
@@ -403,10 +405,6 @@ newtype ModuleGen c s a = MG (ReaderT MGS (ST s) a)
 class MonadLLVM m => MonadMG m where
     liftMG :: ModuleGen c s a -> m c s a
 
-instance MonadReader (STModule c s) (ModuleGen c s) where
-    ask = fmap (STM . mgModule) (MG ask)
-    local f (MG mg) = MG (local (\(MGS m ctx) -> MGS (unSTM . f . STM $ m) ctx) mg)
-
 instance MonadLLVM ModuleGen where
     getContext = fmap mgCtx $ MG ask
     liftLL (LL s) = do ctx <- getContext
@@ -421,7 +419,7 @@ unsafeMod :: ModuleGen c s W.Module
 unsafeMod = fmap mgModule $ MG ask
 
 getModule :: MonadMG m => m c s (STModule c s)
-getModule = liftMG ask
+getModule = liftMG $ fmap (STM . mgModule) (MG ask)
 
 genModule :: (Monad (m c s), MonadLLVM m) => String -> ModuleGen c s a -> m c s a
 genModule name (MG mg) = do
