@@ -9,7 +9,9 @@ module LLVM.Core.CodeGenMonad(
     liftIO
     ) where
 import Data.Typeable
-import Control.Monad.State
+import Control.Monad.Trans.State (StateT, runStateT, evalStateT, get, gets, put, modify, )
+import Control.Monad.IO.Class (MonadIO, liftIO, )
+import Control.Monad.Fix (MonadFix, )
 import Control.Applicative (Applicative, )
 
 import Foreign.Ptr (Ptr, )
@@ -26,17 +28,17 @@ data CGMState = CGMState {
     }
     deriving (Show, Typeable)
 newtype CodeGenModule a = CGM (StateT CGMState IO a)
-    deriving (Functor, Applicative, Monad, MonadFix, MonadState CGMState, MonadIO, Typeable)
+    deriving (Functor, Applicative, Monad, MonadFix, MonadIO, Typeable)
 
 genMSym :: String -> CodeGenModule String
 genMSym prefix = do
-    s <- get
+    s <- CGM get
     let n = cgm_next s
-    put (s { cgm_next = n + 1 })
+    CGM $ put (s { cgm_next = n + 1 })
     return $ "_" ++ prefix ++ show n
 
 getModule :: CodeGenModule Module
-getModule = gets cgm_module
+getModule = CGM $ gets cgm_module
 
 runCodeGenModule :: Module -> CodeGenModule a -> IO a
 runCodeGenModule m (CGM body) = do
@@ -54,36 +56,36 @@ data CGFState r = CGFState {
     deriving (Show, Typeable)
 
 newtype CodeGenFunction r a = CGF (StateT (CGFState r) IO a)
-    deriving (Functor, Applicative, Monad, MonadFix, MonadState (CGFState r), MonadIO, Typeable)
+    deriving (Functor, Applicative, Monad, MonadFix, MonadIO, Typeable)
 
 genFSym :: CodeGenFunction a String
 genFSym = do
-    s <- get
+    s <- CGF get
     let n = cgf_next s
-    put (s { cgf_next = n + 1 })
+    CGF $ put (s { cgf_next = n + 1 })
     return $ "_L" ++ show n
 
 getFunction :: CodeGenFunction a Function
-getFunction = gets cgf_function
+getFunction = CGF $ gets cgf_function
 
 getBuilder :: CodeGenFunction a Builder
-getBuilder = gets cgf_builder
+getBuilder = CGF $ gets cgf_builder
 
 getFunctionModule :: CodeGenFunction a Module
-getFunctionModule = gets (cgm_module . cgf_module)
+getFunctionModule = CGF $ gets (cgm_module . cgf_module)
 
 getExterns :: CodeGenFunction a [(String, Function)]
-getExterns = gets (cgm_externs . cgf_module)
+getExterns = CGF $ gets (cgm_externs . cgf_module)
 
 putExterns :: [(String, Function)] -> CodeGenFunction a ()
 putExterns es = do
-    cgf <- get
+    cgf <- CGF get
     let cgm' = (cgf_module cgf) { cgm_externs = es }
-    put (cgf { cgf_module = cgm' })
+    CGF $ put (cgf { cgf_module = cgm' })
 
 addGlobalMapping ::
     Function -> Ptr () -> CodeGenModule ()
-addGlobalMapping value func = modify $ \cgm ->
+addGlobalMapping value func = CGM $ modify $ \cgm ->
         cgm { cgm_global_mappings =
                  (value,func) : cgm_global_mappings cgm }
 
@@ -98,17 +100,17 @@ via 'LLVM.ExecutionEngine.addGlobalMappings'.
 getGlobalMappings ::
     CodeGenModule GlobalMappings
 getGlobalMappings =
-   gets (GlobalMappings . cgm_global_mappings)
+    CGM $ gets (GlobalMappings . cgm_global_mappings)
 
 runCodeGenFunction :: Builder -> Function -> CodeGenFunction r a -> CodeGenModule a
 runCodeGenFunction bld fn (CGF body) = do
-    cgm <- get
+    cgm <- CGM get
     let cgf = CGFState { cgf_module = cgm,
                          cgf_builder = bld,
                          cgf_function = fn,
                          cgf_next = 1 }
     (a, cgf') <- liftIO $ runStateT body cgf
-    put (cgf_module cgf')
+    CGM $ put (cgf_module cgf')
     return a
 
 --------------------------------------
@@ -116,7 +118,7 @@ runCodeGenFunction bld fn (CGF body) = do
 -- | Allows you to define part of a module while in the middle of defining a function.
 liftCodeGenModule :: CodeGenModule a -> CodeGenFunction r a
 liftCodeGenModule (CGM act) = do
-    cgf <- get
+    cgf <- CGF get
     (a, cgm') <- liftIO $ runStateT act (cgf_module cgf)
-    put (cgf { cgf_module = cgm' })
+    CGF $ put (cgf { cgf_module = cgm' })
     return a

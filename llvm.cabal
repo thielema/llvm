@@ -45,7 +45,7 @@ library
     bytestring >= 0.9,
     directory,
     llvm-base >= 3.2.0.0 && < 4,
-    mtl,
+    transformers >= 0.2 && <0.4,
     process,
     type-level,
     containers

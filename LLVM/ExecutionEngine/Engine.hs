@@ -14,7 +14,10 @@ module LLVM.ExecutionEngine.Engine(
        runFunction, getRunFunction,
        GenericValue, Generic(..)
        ) where
-import Control.Monad.State
+import qualified Control.Monad.Trans.State as MS
+import Control.Monad.Trans.State (StateT, runStateT, )
+import Control.Monad.IO.Class (MonadIO, liftIO, )
+import Control.Monad (liftM, )
 import Control.Applicative (Applicative, )
 import Control.Concurrent.MVar
 import Data.Typeable
@@ -127,7 +130,7 @@ data EAState = EAState {
     deriving (Show, Typeable)
 
 newtype EngineAccess a = EA (StateT EAState IO a)
-    deriving (Functor, Applicative, Monad, MonadState EAState, MonadIO)
+    deriving (Functor, Applicative, Monad, MonadIO)
 
 -- |The LLVM execution engine is encapsulated so it cannot be accessed directly.
 -- The reason is that (currently) there must only ever be one engine,
@@ -142,14 +145,18 @@ runEngineAccess (EA body) = do
 
 addModuleProvider :: ModuleProvider -> EngineAccess ()
 addModuleProvider prov = do
-    ea <- get
-    put ea{ ea_providers = prov : ea_providers ea }
+    ea <- EA MS.get
+    EA $ MS.put ea{ ea_providers = prov : ea_providers ea }
     liftIO $ withModuleProvider prov $ \ provPtr ->
                  FFI.addModuleProvider (ea_engine ea) provPtr
 
+
+getEngine :: EngineAccess (Ptr FFI.ExecutionEngine)
+getEngine = EA $ MS.gets ea_engine
+
 getExecutionEngineTargetData :: EngineAccess FFI.TargetDataRef
 getExecutionEngineTargetData = do
-    eePtr <- gets ea_engine
+    eePtr <- getEngine
     liftIO $ FFI.getExecutionEngineTargetData eePtr
 
 {- |
@@ -163,7 +170,7 @@ using 'addFunctionValue' or 'addGlobalMappings'.
 -}
 getPointerToFunction :: Function f -> EngineAccess (FunPtr f)
 getPointerToFunction (Value f) = do
-    eePtr <- gets ea_engine
+    eePtr <- getEngine
     liftIO $ FFI.getPointerToGlobal eePtr f
 
 {- |
@@ -186,7 +193,7 @@ addGlobalMappings (GlobalMappings gms) =
 
 addFunctionValueCore :: U.Function -> Ptr () -> EngineAccess ()
 addFunctionValueCore g f = do
-    eePtr <- gets ea_engine
+    eePtr <- getEngine
     liftIO $ FFI.addGlobalMapping eePtr g f
 
 addModule :: Module -> EngineAccess ()
@@ -200,7 +207,7 @@ addModule m = do
 type FreePointers = (Ptr FFI.ExecutionEngine, FFI.ModuleProviderRef, FFI.ValueRef)
 getFreePointers :: Function f -> EngineAccess FreePointers
 getFreePointers (Value f) = do
-    ea <- get
+    ea <- EA MS.get
     liftIO $ withModuleProvider (head $ ea_providers ea) $ \ mpp ->
         return (ea_engine ea, mpp, f)
 
@@ -225,13 +232,13 @@ withAll ps a = go [] ps
 
 runFunction :: U.Function -> [GenericValue] -> EngineAccess GenericValue
 runFunction func args = do
-    eePtr <- gets ea_engine
+    eePtr <- getEngine
     liftIO $ withAll args $ \argLen argPtr ->
                  createGenericValueWith $ FFI.runFunction eePtr func
                                               (fromIntegral argLen) argPtr
 getRunFunction :: EngineAccess (U.Function -> [GenericValue] -> IO GenericValue)
 getRunFunction = do
-    eePtr <- gets ea_engine
+    eePtr <- getEngine
     return $ \ func args ->
              withAll args $ \argLen argPtr ->
                  createGenericValueWith $ FFI.runFunction eePtr func
